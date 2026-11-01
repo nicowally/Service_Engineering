@@ -57,20 +57,20 @@ class Reaction(str, enum.Enum):
     dislike = "dislike"
 
 
-def _pg_enum(enum_cls: type[enum.Enum], name: str) -> Enum:
+def _pg_enum(enum_cls: type[enum.Enum], name: str) -> Enum: #hilfsmethode um enum werte in Supabase anzulegen über python - durch terminal alembic aufruf wird umgewandelt in SQL in migrationsdatei in versions
     """Postgres-ENUM, das die *Werte* (nicht die Python-Namen) speichert."""
     return Enum(enum_cls, name=name, values_callable=lambda e: [m.value for m in e])
 
 
 # ---------------------------------------------------------------------------
-# Mixins
+# Mixins für Zeitstempel
 # ---------------------------------------------------------------------------
 class TimestampMixin:
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False #braucht server_default, obwohl dies nur zum anlegen ist, weil das feld nicht leer sein darf. Ohne dem kommt fehlermeldung, dient nur dazu, wenn kein wert gegeben ist, soll supabase die felder mit der jeztigen zeit ausfüllen
     )
 
 
@@ -87,7 +87,7 @@ class User(TimestampMixin, Base):
         _pg_enum(UserRole, "user_role"), default=UserRole.user, nullable=False
     )
 
-    collection: Mapped[list["CollectionEntry"]] = relationship(
+    collection: Mapped[list["CollectionEntry"]] = relationship( #beziehungen zu anderen lists, die man abfragen kann. zb alle comments von anna mit anna.comment und sqlarchemy bildet im hintergrund die sql abfrage
         back_populates="user", cascade="all, delete-orphan"
     )
     comments: Mapped[list["Comment"]] = relationship(
@@ -96,10 +96,10 @@ class User(TimestampMixin, Base):
     ratings: Mapped[list["Rating"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
-    created_items: Mapped[list["MusicItem"]] = relationship(back_populates="created_by")
+    created_items: Mapped[list["MusicItem"]] = relationship(back_populates="created_by") #bewusst kein cascade, weil dies nur für admins möglich ist
 
     def __repr__(self) -> str:
-        return f"<User {self.username} ({self.role.value})>"
+        return f"<User {self.username} ({self.role.value})>" #dient zur ausgabe, damit es lesbar ist
 
 
 class MusicItem(TimestampMixin, Base):
@@ -148,7 +148,7 @@ class MusicItem(TimestampMixin, Base):
     )
 
     @property
-    def tracks(self) -> list["MusicItem"]:
+    def tracks(self) -> list["MusicItem"]: #holt die tracks aus dem album direkt aus. Track_link gibt nur zurück musicitemtrack pos 1 etc.
         return [link.track for link in self.track_links]
 
     def __repr__(self) -> str:

@@ -11,3 +11,4 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+"fertiges objekt, welches den Inhalt von Settings() für andere Files speichert und abgerufen wird"

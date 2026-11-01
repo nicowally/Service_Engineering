@@ -1,4 +1,3 @@
-
 import uuid
 from datetime import datetime
 from typing import Annotated, Literal
@@ -35,7 +34,7 @@ DB = Annotated[Session, Depends(get_db)]
 
 
 # ===========================================================================
-# 1. DTOs
+# 1. DTOs // beschreibt wie die Daten aussehen müssen, was in den hilfsfunktionen übergeben werden muss
 # ===========================================================================
 class ORM(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -126,7 +125,7 @@ class CollectionAdd(BaseModel):
 
     @model_validator(mode="after")
     def _id_or_title(self):
-        if self.music_item_id is None and not self.title:
+        if self.music_item_id is None and not self.title:  # beide felder können leer sein, weil man über title und id suchen kann - dann fehlermeldung
             raise ValueError("Entweder 'music_item_id' oder 'title' angeben")
         return self
 
@@ -139,7 +138,8 @@ class CollectionMark(BaseModel):
     )
     is_favourite: bool | None = None
 
-    model_config = ConfigDict(json_schema_extra={"examples": [{"reaction": "like", "is_favourite": True}]})
+    model_config = ConfigDict(json_schema_extra={"examples": [
+        {"reaction": "like", "is_favourite": True}]})  # beispielvorlage für swagger, wie es ausgegeben werden sollte
 
 
 class CollectionEntryRead(ORM):
@@ -179,24 +179,26 @@ class RatingSummary(BaseModel):
 
 
 # ===========================================================================
-# 2. Hilfsfunktionen
+# 2. Hilfsfunktionen - mehrere Aufrufe und nur über code aufrufbar
 # ===========================================================================
 def get_user(db: Session, username: str) -> User:
-    user = db.scalar(select(User).where(User.username == username))
+    user = db.scalar(select(User).where(
+        User.username == username))  # überprüft tabelle User, ob deren username gleich ist mis username
     if user is None:
         raise HTTPException(404, f"User '{username}' nicht gefunden")
     return user
 
 
 def get_item(db: Session, item_id: uuid.UUID) -> MusicItem:
-    item = db.get(MusicItem, item_id)
+    item = db.get(MusicItem, item_id)  # holt item aus tabelle MusicItem
     if item is None:
         raise HTTPException(404, "Music Item nicht gefunden")
     return item
 
 
 def find_item_by_title(db: Session, title: str) -> MusicItem:
-    items = db.scalars(select(MusicItem).where(func.lower(MusicItem.title) == title.lower())).all()
+    items = db.scalars(select(MusicItem).where(func.lower(
+        MusicItem.title) == title.lower())).all()  # funclower - Groß- und Kleinschreibung egal - Und scalars. all() weil hier liste von mehreren einträgen zurückkommen kann
     if not items:
         raise HTTPException(404, f"Kein Music Item mit dem Titel '{title}' gefunden")
     if len(items) > 1:
@@ -212,7 +214,7 @@ def find_item_by_title(db: Session, title: str) -> MusicItem:
     return items[0]
 
 
-def get_caller(
+def get_caller(  # wird benötigt für feststellung von Admin oder User
         db: DB, x_username: Annotated[str, Header(description="Username des Aufrufers (ersetzt den Login)")]
 ) -> User:
     """Dependency: wer schickt die Anfrage? (Header X-Username)"""
@@ -335,6 +337,13 @@ def delete_music_item(item_id: uuid.UUID, db: DB, admin: Admin):
     return Response(status_code=204)
 
 
+@app.get("/collections", response_model=list[UserCollection], tags=["Übersicht"],
+         summary="Sammlungen aller User")
+def get_all_collections(db: DB, admin: Admin):
+    users = db.scalars(select(User).order_by(User.username)).all()
+    return [UserCollection(username=u.username, items=u.collection) for u in users]
+
+
 # ===========================================================================
 # 3b. Persönliche Sammlung – User
 # ===========================================================================
@@ -370,9 +379,10 @@ def add_to_collection(username: str, body: CollectionAdd, db: DB, caller: Caller
            tags=["Sammlung"], summary="Als like / dislike / favourite markieren",
            description="Erlaubt: der User selbst oder ein Admin.")
 def mark_collection_item(username: str, item_id: uuid.UUID, body: CollectionMark, db: DB, caller: Caller):
-    require_owner_or_admin(caller, username)
+    require_owner_or_admin(caller, username)  # überprüft ob es eigene sammlung ist bzw admin
     entry = get_entry(db, get_user(db, username), item_id)
-    for field, value in body.model_dump(exclude_unset=True).items():
+    for field, value in body.model_dump(
+            exclude_unset=True).items():  # schleife weil collectionmark aus zwei feldern besteht
         setattr(entry, field, value)
     db.commit()
     return entry
@@ -386,16 +396,6 @@ def remove_from_collection(username: str, item_id: uuid.UUID, db: DB, caller: Ca
     db.delete(get_entry(db, get_user(db, username), item_id))
     db.commit()
     return Response(status_code=204)
-
-
-# ===========================================================================
-# 3c. Übersicht aller User
-# ===========================================================================
-@app.get("/collections", response_model=list[UserCollection], tags=["Übersicht"],
-         summary="Sammlungen aller User")
-def get_all_collections(db: DB):
-    users = db.scalars(select(User).order_by(User.username)).all()
-    return [UserCollection(username=u.username, items=u.collection) for u in users]
 
 
 # ===========================================================================

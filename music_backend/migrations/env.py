@@ -8,7 +8,7 @@ from app.config import settings
 from app.database import Base
 
 config = context.config
-# Verbindungs-URL aus der .env (Prozentzeichen für configparser escapen)
+# Verbindungs-URL aus der .env (Prozentzeichen für configparser escapen) - Datei wird für die Datenbankverbindung benötigt für alembic, wird als erstes gelesen, bevor es mit models dann veränderungen abgleicht und eine neue version erstellt. (alembic revision --autogenerate -m "neue spalte")
 config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"))
 
 if config.config_file_name is not None:
