@@ -2,7 +2,8 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Literal
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Response
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import func, or_, select, text
 from sqlalchemy.orm import Session
@@ -38,6 +39,12 @@ DB = Annotated[Session, Depends(get_db)]
 # ===========================================================================
 class ORM(BaseModel):
     model_config = ConfigDict(from_attributes=True)
+
+
+class UserRead(ORM):
+    id: uuid.UUID
+    username: str
+    role: UserRole
 
 
 class TrackCreate(BaseModel):
@@ -85,6 +92,9 @@ class AlbumCreate(BaseModel):
 class MusicItemUpdate(BaseModel):
     """Alle Felder optional – nur mitgeschickte Felder werden geändert."""
 
+    # unbekannte Felder (z. B. "tracks" statt "track_ids") -> 422 statt stillem Ignorieren
+    model_config = ConfigDict(extra="forbid")
+
     title: str | None = Field(default=None, min_length=1, max_length=255)
     artist: str | None = None
     album_name: str | None = None
@@ -94,8 +104,14 @@ class MusicItemUpdate(BaseModel):
     description: str | None = None
     external_url: str | None = None
     track_ids: list[uuid.UUID] | None = Field(
-        default=None, description="Nur bei Album/Playlist: ersetzt die Trackliste"
+        default=None, description="Nur bei Album/Playlist: ersetzt die komplette Trackliste"
     )
+
+
+class TrackAdd(BaseModel):
+    """Einen bestehenden Track an ein Album / eine Playlist anhängen."""
+
+    track_id: uuid.UUID
 
 
 class MusicItemRead(ORM):
@@ -150,12 +166,16 @@ class CollectionEntryRead(ORM):
 
 
 class UserCollection(BaseModel):
+    user_id: uuid.UUID
     username: str
     items: list[CollectionEntryRead]
 
 
 class CommentCreate(BaseModel):
-    username: str = Field(examples=["anna"])
+    """Nur der Kommentartext – der User kommt als eigener Parameter (user_id)."""
+
+    model_config = ConfigDict(extra="forbid")
+
     text: str = Field(min_length=1, max_length=2000, examples=["Absoluter Klassiker!"])
 
 
@@ -167,7 +187,10 @@ class CommentRead(BaseModel):
 
 
 class RatingSet(BaseModel):
-    username: str = Field(examples=["anna"])
+    """Nur die Sterne – der User kommt als eigener Parameter (user_id)."""
+
+    model_config = ConfigDict(extra="forbid")
+
     stars: int = Field(ge=1, le=5, examples=[5])
 
 
@@ -186,6 +209,13 @@ def get_user(db: Session, username: str) -> User:
         User.username == username))  # überprüft tabelle User, ob deren username gleich ist mis username
     if user is None:
         raise HTTPException(404, f"User '{username}' nicht gefunden")
+    return user
+
+
+def get_user_by_id(db: Session, user_id: uuid.UUID) -> User:
+    user = db.get(User, user_id)  # sucht direkt über den Primärschlüssel
+    if user is None:
+        raise HTTPException(404, f"User {user_id} nicht gefunden")
     return user
 
 
@@ -237,14 +267,14 @@ def require_admin(caller: Caller) -> User:
 Admin = Annotated[User, Depends(require_admin)]
 
 
-def require_owner_or_admin(caller: User, username: str) -> None:
+def require_owner_or_admin(caller: User, user_id: uuid.UUID) -> None:
     """User dürfen nur ihre eigene Sammlung ändern, Admins jede."""
-    if caller.role != UserRole.admin and caller.username != username:
+    if caller.role != UserRole.admin and caller.id != user_id:
         raise HTTPException(403, "Du darfst nur deine eigene Sammlung ändern")
 
 
 def set_tracks(db: Session, item: MusicItem, track_ids: list[uuid.UUID]) -> None:
-    """Trackliste eines Albums / einer Playlist setzen."""
+    """Trackliste eines Albums / einer Playlist setzen (ersetzt die komplette Liste)."""
     if track_ids and item.type == MusicItemType.track:
         raise HTTPException(422, "'track_ids' gibt es nur bei Album und Playlist")
     if len(set(track_ids)) != len(track_ids):
@@ -257,6 +287,11 @@ def set_tracks(db: Session, item: MusicItem, track_ids: list[uuid.UUID]) -> None
         if track.type != MusicItemType.track:
             raise HTTPException(422, f"'{track.title}' ist kein einzelner Track")
         links.append(MusicItemTrack(track=track, position=position))
+
+    # Alte Zuordnungen zuerst wirklich löschen, sonst kollidieren die neuen
+    # Positionen mit dem Unique-Constraint (container_id, position).
+    item.track_links.clear()
+    db.flush()
     item.track_links = links
 
 
@@ -316,16 +351,40 @@ def create_album(body: AlbumCreate, db: DB, admin: Admin):
 
 
 @app.patch("/music-items/{item_id}", response_model=MusicItemDetail, tags=["Katalog"],
-           summary="Music Item ändern (Admin)")
+           summary="Music Item ändern (Admin)",
+           description="Nur mitgeschickte Felder werden geändert. 'track_ids' ersetzt die komplette "
+                       "Trackliste – zum Anhängen eines einzelnen Songs POST /music-items/{item_id}/tracks verwenden.")
 def update_music_item(item_id: uuid.UUID, body: MusicItemUpdate, db: DB, admin: Admin):
     item = get_item(db, item_id)
     changes = body.model_dump(exclude_unset=True)
+    if "title" in changes and changes["title"] is None:
+        raise HTTPException(422, "'title' darf nicht leer sein")
     if "track_ids" in changes:
         set_tracks(db, item, changes.pop("track_ids") or [])
     for field, value in changes.items():
         setattr(item, field, value)
     db.commit()
     db.refresh(item)
+    return item
+
+
+@app.post("/music-items/{item_id}/tracks", response_model=MusicItemDetail, tags=["Katalog"],
+          summary="Einen Track an Album/Playlist anhängen (Admin)")
+def add_track_to_item(item_id: uuid.UUID, body: TrackAdd, db: DB, admin: Admin):
+    item = get_item(db, item_id)
+    if item.type == MusicItemType.track:
+        raise HTTPException(422, "Tracks kann man nur zu Album oder Playlist hinzufügen")
+
+    track = get_item(db, body.track_id)
+    if track.type != MusicItemType.track:
+        raise HTTPException(422, f"'{track.title}' ist kein einzelner Track")
+    if any(link.track_id == track.id for link in item.track_links):
+        raise HTTPException(409, f"'{track.title}' ist schon in '{item.title}'")
+
+    # nächste freie Position = höchste bisherige + 1 (bei leerer Liste: 1)
+    next_position = max((link.position for link in item.track_links), default=0) + 1
+    item.track_links.append(MusicItemTrack(track=track, position=next_position))
+    db.commit()
     return item
 
 
@@ -341,33 +400,42 @@ def delete_music_item(item_id: uuid.UUID, db: DB, admin: Admin):
          summary="Sammlungen aller User")
 def get_all_collections(db: DB, admin: Admin):
     users = db.scalars(select(User).order_by(User.username)).all()
-    return [UserCollection(username=u.username, items=u.collection) for u in users]
+    return [UserCollection(user_id=u.id, username=u.username, items=u.collection) for u in users]
 
 
 # ===========================================================================
-# 3b. Persönliche Sammlung – User
+# 3b. User
 # ===========================================================================
-@app.get("/users/{username}/collection", response_model=list[CollectionEntryRead],
+@app.get("/users", response_model=list[UserRead], tags=["User"],
+         summary="Alle User (mit ID)")
+def list_users(db: DB):
+    return db.scalars(select(User).order_by(User.username)).all()
+
+
+# ===========================================================================
+# 3c. Persönliche Sammlung – User
+# ===========================================================================
+@app.get("/users/{user_id}/collection", response_model=list[CollectionEntryRead],
          tags=["Sammlung"], summary="Sammlung eines Users")
-def get_collection(username: str, db: DB, only_favourites: bool = False):
-    user = get_user(db, username)
+def get_collection(user_id: uuid.UUID, db: DB, only_favourites: bool = False):
+    user = get_user_by_id(db, user_id)
     stmt = select(CollectionEntry).where(CollectionEntry.user_id == user.id)
     if only_favourites:
         stmt = stmt.where(CollectionEntry.is_favourite)
     return db.scalars(stmt.order_by(CollectionEntry.added_at.desc())).all()
 
 
-@app.post("/users/{username}/collection", response_model=CollectionEntryRead, status_code=201,
+@app.post("/users/{user_id}/collection", response_model=CollectionEntryRead, status_code=201,
           tags=["Sammlung"], summary="Item zur Sammlung hinzufügen (per ID oder Titel)",
           description="Nur Items, die schon im Katalog sind. Erlaubt: der User selbst oder ein Admin.")
-def add_to_collection(username: str, body: CollectionAdd, db: DB, caller: Caller):
-    require_owner_or_admin(caller, username)
-    user = get_user(db, username)
+def add_to_collection(user_id: uuid.UUID, body: CollectionAdd, db: DB, caller: Caller):
+    require_owner_or_admin(caller, user_id)
+    user = get_user_by_id(db, user_id)
     item = get_item(db, body.music_item_id) if body.music_item_id else find_item_by_title(db, body.title)
     if db.scalar(select(CollectionEntry.id).where(
             CollectionEntry.user_id == user.id, CollectionEntry.music_item_id == item.id
     )):
-        raise HTTPException(409, f"'{item.title}' ist schon in der Sammlung von {username}")
+        raise HTTPException(409, f"'{item.title}' ist schon in der Sammlung von {user.username}")
     entry = CollectionEntry(user=user, music_item=item)
     db.add(entry)
     db.commit()
@@ -375,12 +443,12 @@ def add_to_collection(username: str, body: CollectionAdd, db: DB, caller: Caller
     return entry
 
 
-@app.patch("/users/{username}/collection/{item_id}", response_model=CollectionEntryRead,
+@app.patch("/users/{user_id}/collection/{item_id}", response_model=CollectionEntryRead,
            tags=["Sammlung"], summary="Als like / dislike / favourite markieren",
            description="Erlaubt: der User selbst oder ein Admin.")
-def mark_collection_item(username: str, item_id: uuid.UUID, body: CollectionMark, db: DB, caller: Caller):
-    require_owner_or_admin(caller, username)  # überprüft ob es eigene sammlung ist bzw admin
-    entry = get_entry(db, get_user(db, username), item_id)
+def mark_collection_item(user_id: uuid.UUID, item_id: uuid.UUID, body: CollectionMark, db: DB, caller: Caller):
+    require_owner_or_admin(caller, user_id)  # überprüft ob es eigene sammlung ist bzw admin
+    entry = get_entry(db, get_user_by_id(db, user_id), item_id)
     for field, value in body.model_dump(
             exclude_unset=True).items():  # schleife weil collectionmark aus zwei feldern besteht
         setattr(entry, field, value)
@@ -388,12 +456,12 @@ def mark_collection_item(username: str, item_id: uuid.UUID, body: CollectionMark
     return entry
 
 
-@app.delete("/users/{username}/collection/{item_id}", status_code=204,
+@app.delete("/users/{user_id}/collection/{item_id}", status_code=204,
             tags=["Sammlung"], summary="Item aus der Sammlung entfernen",
             description="Erlaubt: der User selbst oder ein Admin (aus jeder Sammlung).")
-def remove_from_collection(username: str, item_id: uuid.UUID, db: DB, caller: Caller):
-    require_owner_or_admin(caller, username)
-    db.delete(get_entry(db, get_user(db, username), item_id))
+def remove_from_collection(user_id: uuid.UUID, item_id: uuid.UUID, db: DB, caller: Caller):
+    require_owner_or_admin(caller, user_id)
+    db.delete(get_entry(db, get_user_by_id(db, user_id), item_id))
     db.commit()
     return Response(status_code=204)
 
@@ -412,8 +480,13 @@ def list_comments(item_id: uuid.UUID, db: DB):
 
 @app.post("/music-items/{item_id}/comments", response_model=CommentRead, status_code=201,
           tags=["Kommentare & Bewertungen"], summary="Kommentar schreiben")
-def add_comment(item_id: uuid.UUID, body: CommentCreate, db: DB):
-    item, user = get_item(db, item_id), get_user(db, body.username)
+def add_comment(
+        item_id: uuid.UUID,
+        body: CommentCreate,
+        db: DB,
+        user_id: Annotated[uuid.UUID, Query(description="ID des Users, der kommentiert (siehe GET /users)")],
+):
+    item, user = get_item(db, item_id), get_user_by_id(db, user_id)
     comment = Comment(user=user, music_item=item, text=body.text)
     db.add(comment)
     db.commit()
@@ -432,8 +505,13 @@ def get_rating(item_id: uuid.UUID, db: DB):
 
 @app.put("/music-items/{item_id}/rating", response_model=RatingSummary,
          tags=["Kommentare & Bewertungen"], summary="1–5 Sterne vergeben (überschreibt eigene Bewertung)")
-def set_rating(item_id: uuid.UUID, body: RatingSet, db: DB):
-    item, user = get_item(db, item_id), get_user(db, body.username)
+def set_rating(
+        item_id: uuid.UUID,
+        body: RatingSet,
+        db: DB,
+        user_id: Annotated[uuid.UUID, Query(description="ID des Users, der bewertet (siehe GET /users)")],
+):
+    item, user = get_item(db, item_id), get_user_by_id(db, user_id)
     rating = db.scalar(select(Rating).where(Rating.user_id == user.id, Rating.music_item_id == item.id))
     if rating:
         rating.stars = body.stars
@@ -447,6 +525,12 @@ def set_rating(item_id: uuid.UUID, body: RatingSet, db: DB):
 # ===========================================================================
 # Technisch
 # ===========================================================================
+@app.get("/", include_in_schema=False)
+def root():
+    """Startseite leitet direkt auf Swagger weiter."""
+    return RedirectResponse(url="/docs")
+
+
 @app.get("/health/db", tags=["Health"], summary="Datenbankverbindung prüfen")
 def health_db(db: DB) -> dict:
     try:
