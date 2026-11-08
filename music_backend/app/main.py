@@ -31,7 +31,8 @@ app = FastAPI(
     ),
 )
 
-DB = Annotated[Session, Depends(get_db)]
+DB = Annotated[Session, Depends(get_db)] #mit Annotated rein nur Anmerkung. Python liest das nicht
+                                         #aber fastapi schon, mit Depend(get_db) wird methode aufgerufen
 
 
 # ===========================================================================
