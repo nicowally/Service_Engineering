@@ -20,7 +20,7 @@ app/
   config.py        Einstellungen aus .env (DATABASE_URL …)
   database.py      Engine, Session, Base, get_db()-Dependency
   models.py        ORM-Datenmodell (alle Tabellen)
-  main.py          FastAPI-App (vorerst nur /health/db)
+  main.py          FastAPI-App mit Katalog, Sammlungen, Kommentaren, Ratings und Health-Check
 migrations/        Alembic-Migrationen (0001_initial_schema.py)
 scripts/
   check_db.py      Verbindungstest
@@ -101,7 +101,7 @@ uvicorn app.main:app --reload
 ### 7. Datenbank in IntelliJ ansehen (nur IntelliJ **Ultimate**)
 *View → Tool Windows → Database → + → Data Source → PostgreSQL*, Werte aus dem Supabase-„Connect“-Dialog (Session pooler):
 - Host: `aws-…pooler.supabase.com`, Port `5432`, Database `postgres`
-- User: `postgres.pjqnjwkofoaerjwbocsy`, Password: euer DB-Passwort
+- User: `postgres.<project-ref>` (aus dem Session-Pooler-Verbindungsstring), Password: euer DB-Passwort
 - Reiter *SSH/SSL* → **Use SSL** aktivieren, Mode `require`
 
 In der Community Edition gibt es kein Database-Fenster – dann einfach den Table Editor im Supabase-Dashboard verwenden.

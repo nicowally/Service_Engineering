@@ -4,6 +4,7 @@
   import { library, entryFor, changeCollection } from '#lib/state/library.svelte.js';
   import Cover from '#lib/components/Cover.svelte';
   import Icon from '#lib/components/Icon.svelte';
+  import Feedback from '#lib/components/Feedback.svelte';
   let item = $state(null);
   let loading = $state(true);
   let error = $state('');
@@ -102,4 +103,5 @@
           </li>{/each}
       </ol>
     </section>{/if}
+  {#key item.id}<Feedback itemId={item.id} />{/key}
 {/if}

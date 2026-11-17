@@ -52,14 +52,14 @@ class TrackCreate(BaseModel):
     """Einzelnen Song anlegen."""
 
     title: str = Field(min_length=1, max_length=255)
-    artist: str | None = None
-    album_name: str | None = None
-    genre: str | None = None
+    artist: str | None = Field(default=None, max_length=255)
+    album_name: str | None = Field(default=None, max_length=255)
+    genre: str | None = Field(default=None, max_length=100)
     release_year: int | None = Field(default=None, ge=1000, le=9999)
     duration_seconds: int | None = Field(default=None, ge=0)
     description: str | None = None
     external_url: str | None = Field(
-        default=None, description="Referenz auf den eigentlichen Track, z. B. Spotify-Link"
+        default=None, max_length=1024, description="Referenz auf den eigentlichen Track, z. B. Spotify-Link"
     )
 
     model_config = ConfigDict(json_schema_extra={"examples": [{
@@ -74,11 +74,11 @@ class AlbumCreate(BaseModel):
 
     type: Literal["album", "playlist"] = "album"
     title: str = Field(min_length=1, max_length=255)
-    artist: str | None = None
-    genre: str | None = None
+    artist: str | None = Field(default=None, max_length=255)
+    genre: str | None = Field(default=None, max_length=100)
     release_year: int | None = Field(default=None, ge=1000, le=9999)
     description: str | None = None
-    external_url: str | None = None
+    external_url: str | None = Field(default=None, max_length=1024)
     track_ids: list[uuid.UUID] = Field(
         min_length=1, description="IDs der enthaltenen Tracks in Reihenfolge (siehe GET /music-items?type=track)"
     )
@@ -97,13 +97,13 @@ class MusicItemUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     title: str | None = Field(default=None, min_length=1, max_length=255)
-    artist: str | None = None
-    album_name: str | None = None
-    genre: str | None = None
+    artist: str | None = Field(default=None, max_length=255)
+    album_name: str | None = Field(default=None, max_length=255)
+    genre: str | None = Field(default=None, max_length=100)
     release_year: int | None = Field(default=None, ge=1000, le=9999)
     duration_seconds: int | None = Field(default=None, ge=0)
     description: str | None = None
-    external_url: str | None = None
+    external_url: str | None = Field(default=None, max_length=1024)
     track_ids: list[uuid.UUID] | None = Field(
         default=None, description="Nur bei Album/Playlist: ersetzt die komplette Trackliste"
     )
@@ -154,6 +154,12 @@ class CollectionMark(BaseModel):
         default=None, description="'like', 'dislike' oder null (= Reaktion entfernen)"
     )
     is_favourite: bool | None = None
+
+    @model_validator(mode="after")
+    def _favourite_not_null(self):
+        if "is_favourite" in self.model_fields_set and self.is_favourite is None:
+            raise ValueError("is_favourite must be true or false")
+        return self
 
     model_config = ConfigDict(json_schema_extra={"examples": [
         {"reaction": "like", "is_favourite": True}]})  # beispielvorlage für swagger, wie es ausgegeben werden sollte

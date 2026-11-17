@@ -1,4 +1,15 @@
-import { demoItems, demoUsers, getDemoCollection, changeDemoCollection } from './demo.js';
+import {
+  demoUsers,
+  getDemoItems,
+  getDemoCollection,
+  changeDemoCollection,
+  saveDemoItem,
+  deleteDemoItem,
+  getDemoComments,
+  addDemoComment,
+  getDemoRating,
+  setDemoRating
+} from './demo.js';
 
 // These variables are public. Database credentials belong in FastAPI only.
 export const demoMode = import.meta.env.VITE_USE_DEMO_DATA !== 'false';
@@ -39,14 +50,14 @@ async function request(path, { method = 'GET', body, user } = {}) {
   }
 }
 export async function listMusic() {
-  return demoMode ? structuredClone(demoItems) : request('/music-items');
+  return demoMode ? structuredClone(getDemoItems()) : request('/music-items');
 }
 export async function listUsers() {
   return demoMode ? structuredClone(demoUsers) : request('/users');
 }
 export async function getMusic(id) {
   if (!demoMode) return request(`/music-items/${encodeURIComponent(id)}`);
-  const item = demoItems.find((entry) => entry.id === id);
+  const item = getDemoItems().find((entry) => entry.id === id);
   if (!item) throw new Error('This music item could not be found.');
   return structuredClone(item);
 }
@@ -71,5 +82,51 @@ export async function markCollectionItem(user, itemId, changes) {
     method: 'PATCH',
     body: changes,
     user
+  });
+}
+
+export async function saveMusic(user, body, itemId = null) {
+  if (demoMode) return saveDemoItem(user, body, itemId);
+  if (itemId) return request(`/music-items/${itemId}`, { method: 'PATCH', body, user });
+  return request(body.type === 'track' ? '/music-items/tracks' : '/music-items/albums', {
+    method: 'POST',
+    body:
+      body.type === 'track'
+        ? Object.fromEntries(Object.entries(body).filter(([key]) => key !== 'type'))
+        : body,
+    user
+  });
+}
+export async function deleteMusic(user, itemId) {
+  if (demoMode) return deleteDemoItem(user, itemId);
+  return request(`/music-items/${itemId}`, { method: 'DELETE', user });
+}
+export async function getAllCollections(user) {
+  if (!demoMode) return request('/collections', { user });
+  if (user?.role !== 'admin') throw new Error('Only admins can view all collections.');
+  return demoUsers.map((entry) => ({
+    user_id: entry.id,
+    username: entry.username,
+    items: getDemoCollection(entry.id)
+  }));
+}
+export async function getComments(itemId) {
+  return demoMode ? getDemoComments(itemId) : request(`/music-items/${itemId}/comments`);
+}
+export async function addComment(user, itemId, text) {
+  if (demoMode) return addDemoComment(user, itemId, text);
+  return request(`/music-items/${itemId}/comments?user_id=${encodeURIComponent(user.id)}`, {
+    method: 'POST',
+    body: { text }
+  });
+}
+export async function getRating(itemId) {
+  return demoMode ? getDemoRating(itemId) : request(`/music-items/${itemId}/rating`);
+}
+export async function setRating(user, itemId, stars) {
+  if (demoMode) return setDemoRating(user, itemId, stars);
+  return request(`/music-items/${itemId}/rating?user_id=${encodeURIComponent(user.id)}`, {
+    method: 'PUT',
+    body: { stars }
   });
 }

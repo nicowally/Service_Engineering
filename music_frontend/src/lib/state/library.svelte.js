@@ -71,6 +71,10 @@ export async function selectUser(userId) {
 export function entryFor(itemId) {
   return library.collection.find((entry) => entry.music_item.id === itemId);
 }
+export async function refreshLibrary() {
+  library.items = await api.listMusic();
+  if (library.user) await refreshCollection(library.user);
+}
 export async function changeCollection(itemId, action, changes = {}) {
   const user = library.user;
   if (!user || library.collectionLoading || library.pending[itemId]) return;

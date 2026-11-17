@@ -40,6 +40,19 @@
         aria-current={page.url.pathname === '/collection' ? 'page' : undefined}
         >My collection<span class="nav-count">{library.collection.length}</span></a
       >
+      {#if library.user?.role === 'admin'}
+        <a
+          href="/admin"
+          class:current={page.url.pathname === '/admin'}
+          aria-current={page.url.pathname === '/admin' ? 'page' : undefined}>Manage music</a
+        >
+        <a
+          href="/collections"
+          class:current={page.url.pathname === '/collections'}
+          aria-current={page.url.pathname === '/collections' ? 'page' : undefined}
+          >All collections</a
+        >
+      {/if}
     </nav>
     <div class="header-tools">
       <span class="mode-badge"><span></span>{demoMode ? 'Sample library' : 'FastAPI mode'}</span
